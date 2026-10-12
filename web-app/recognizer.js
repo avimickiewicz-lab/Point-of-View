@@ -1,7 +1,8 @@
 // Загрузка braile.onnx и запуск распознавания в браузере через ONNX Runtime Web.
 import { preprocess, postprocess } from './braille.js';
+import { t } from './i18n.js';
 
-export const MODEL_URL = 'model/braile.onnx';
+export const MODEL_URL = 'models/braile.onnx';
 const ORT_DIST = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
 
 let sessionPromise = null;
@@ -12,14 +13,14 @@ export function loadModel(onProgress = () => {}) {
   sessionPromise ??= (async () => {
     const ort = globalThis.ort;
     if (!ort) {
-      throw new Error('Не загрузилась библиотека ONNX Runtime. При первом запуске нужен интернет.');
+      throw new Error(t('model.noOrt'));
     }
     ort.env.wasm.wasmPaths = ORT_DIST;
     ort.env.wasm.numThreads = globalThis.crossOriginIsolated
       ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
 
-    const model = await fetchWithProgress(MODEL_URL, (p) => onProgress(p, 'Загрузка модели'));
-    onProgress(null, 'Подготовка модели');
+    const model = await fetchWithProgress(MODEL_URL, (p) => onProgress(p, t('model.loading')));
+    onProgress(null, t('model.preparing'));
 
     const opts = { graphOptimizationLevel: 'all' };
     if (navigator.gpu) {
@@ -43,7 +44,7 @@ export const getBackend = () => backend;
 
 async function fetchWithProgress(url, onProgress) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Модель не найдена (${res.status}): ${url}`);
+  if (!res.ok) throw new Error(t('model.notFound', { status: res.status, url }));
   const total = Number(res.headers.get('Content-Length')) || 0;
   if (!res.body || !total) return new Uint8Array(await res.arrayBuffer());
 
@@ -66,7 +67,7 @@ async function fetchWithProgress(url, onProgress) {
  */
 export async function recognize(blob, onProgress = () => {}, opts = {}) {
   const session = await loadModel(onProgress);
-  onProgress(null, 'Распознавание');
+  onProgress(null, t('model.running'));
 
   const bitmap = await createImageBitmap(blob);
   const meta = preprocess(bitmap);

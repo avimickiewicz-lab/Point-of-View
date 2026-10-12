@@ -1,0 +1,8 @@
+{
+  "provider": "openai",
+  "base_url": "http://localhost:11434/v1",
+  "model": "qwen3:4b",
+  "no_think": true,
+  "timeout": 180,
+  "access_token": ""
+}

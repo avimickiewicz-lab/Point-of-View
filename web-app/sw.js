@@ -1,7 +1,7 @@
 // Сервис-воркер: офлайн-кэш оболочки приложения (PWA)
-const CACHE = 'pov-shell-v2';
-const HEAVY = 'pov-heavy-v1';   // модель и ONNX Runtime: большие, меняются редко
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'braille.js', 'recognizer.js', 'manifest.webmanifest',
+const CACHE = 'pov-shell-v5';
+const HEAVY = 'pov-heavy-v2';   // модель и ONNX Runtime: большие, меняются редко
+const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'braille.js', 'recognizer.js', 'standards.js', 'zh.js', 'i18n.js', 'agent.js', 'corrector.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -14,13 +14,18 @@ self.addEventListener('activate', (e) => {
     .then(() => self.clients.claim()));
 });
 
-const isHeavy = (url) => url.pathname.endsWith('.onnx') || url.hostname === 'cdn.jsdelivr.net';
+// Модель, ONNX Runtime, liblouis и словарь иероглифов: большие и меняются редко
+const isHeavy = (url) => url.pathname.endsWith('.onnx') || url.hostname === 'cdn.jsdelivr.net' ||
+  url.pathname.includes('/vendor/') || url.pathname.includes('/data/');
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
+  // агент и чужие сайты (Hugging Face — у transformers.js свой кэш) — мимо сервис-воркера
+  if (url.pathname.includes('/api/') || url.pathname.includes('/models/Xenova/')) return;
+  if (url.origin !== location.origin && url.hostname !== 'cdn.jsdelivr.net') return;
 
-  // Модель (~40 МБ) и ONNX Runtime: сначала кэш — скачиваются один раз
+  // Тяжёлые файлы: сначала кэш — скачиваются один раз
   if (isHeavy(url)) {
     e.respondWith(caches.open(HEAVY).then(async (c) => {
       const hit = await c.match(e.request);

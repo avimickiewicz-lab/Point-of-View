@@ -69,7 +69,7 @@ export function preprocess(source, size = INPUT_SIZE) {
  * Разбор выхода [1, 4+C, N]: рамки cx,cy,w,h (в пикселях 640) + оценки классов (уже после sigmoid).
  * Возвращает рамки в координатах исходного изображения после NMS.
  */
-export function decode(output, meta, { confThreshold = 0.1, iouThreshold = 0.45, numClasses = NUM_CLASSES } = {}) {
+export function decode(output, meta, { confThreshold = 0.2, iouThreshold = 0.45, numClasses = NUM_CLASSES } = {}) {
   const n = output.length / (4 + numClasses);
   const cand = [];
   for (let i = 0; i < n; i++) {

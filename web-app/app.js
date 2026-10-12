@@ -1,8 +1,43 @@
-// Point of view — веб-макет: камера → снимок → сохранение в галерею → распознавание Брайля.
+// Point of view — камера → снимок → галерея → распознавание Брайля → исправление и перевод.
 // Аналог MainActivity.kt (CameraX) на Web API: getUserMedia + canvas + IndexedDB + ONNX Runtime Web.
 
 import { recognize } from './recognizer.js';
 import { classLabel, brailleChar } from './braille.js';
+import { STANDARDS, translate, labeler, louisVersion, toBraille } from './standards.js';
+import { t, plural, fmt, setLang, detectLang } from './i18n.js';
+import { correct, translateText, checkAgent, diffWords } from './agent.js';
+
+/* ================= Настройки (хранятся на устройстве) ================= */
+
+const SETTINGS_KEY = 'pov-settings';
+const SETTINGS_VERSION = 2;
+const DEFAULTS = {
+  v: SETTINGS_VERSION,
+  uiLang: detectLang(),
+  defaultStd: 'ru', enGrade: 'g2', zhHanzi: true,
+  fixMode: 'local',          // off | local (словарь на устройстве) | server
+  trMode: 'local',           // off | local (Opus-MT на устройстве) | server
+  autoFix: false,
+  agentUrl: '', agentToken: '',
+};
+const settings = { ...DEFAULTS, ...readSettings() };
+
+function readSettings() {
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch { /* нет хранилища */ }
+  if (s.v !== SETTINGS_VERSION) {
+    // v2: новые значения по умолчанию для исправления и перевода
+    delete s.fixMode;
+    delete s.trMode;
+    s.v = SETTINGS_VERSION;
+  }
+  return s;
+}
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* приватный режим */ }
+}
+
+setLang(settings.uiLang);
 
 const $ = (id) => document.getElementById(id);
 const video = $('video');
@@ -20,10 +55,13 @@ const FILE_PREFIX = 'POV_';
 const JPEG_QUALITY = 0.92;
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
   (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const AI_LANGS = ['ru', 'en'];          // исправление и перевод — для русского и английского
 
 let stream = null;
 let facingMode = 'environment';   // задняя камера по умолчанию (как CameraSelector.DEFAULT_BACK_CAMERA)
 let torchOn = false;
+let cameraErrorKey = null;        // текст ошибки камеры (ключ и параметры) — для смены языка
+let cameraErrorParams = null;
 
 /* ================= Камера ================= */
 
@@ -32,11 +70,7 @@ async function startCamera() {
   shutterBtn.disabled = true;
 
   if (!navigator.mediaDevices?.getUserMedia) {
-    return showCameraState(
-      window.isSecureContext
-        ? 'Браузер не поддерживает доступ к камере.'
-        : 'Камера доступна только по HTTPS или на localhost. Откройте приложение по защищённому адресу.'
-    );
+    return showCameraState(window.isSecureContext ? 'cam.noSupport' : 'cam.insecure');
   }
 
   try {
@@ -51,9 +85,9 @@ async function startCamera() {
   } catch (err) {
     console.error(err);
     const denied = err.name === 'NotAllowedError' || err.name === 'SecurityError';
-    return showCameraState(denied
-      ? 'Доступ к камере запрещён. Разрешите его в настройках браузера и нажмите кнопку ниже.'
-      : `Не удалось запустить камеру: ${err.message || err.name}`);
+    return denied
+      ? showCameraState('cam.denied')
+      : showCameraState('cam.failed', { msg: err.message || err.name });
   }
 
   video.srcObject = stream;
@@ -61,19 +95,22 @@ async function startCamera() {
   try { await video.play(); } catch { /* autoplay ждёт жеста — не критично */ }
 
   cameraState.hidden = true;
+  cameraErrorKey = null;
   shutterBtn.disabled = false;
   setupTorch();
   updateSwitchVisibility();
 }
 
 function stopCamera() {
-  stream?.getTracks().forEach((t) => t.stop());
+  stream?.getTracks().forEach((tr) => tr.stop());
   stream = null;
   torchOn = false;
 }
 
-function showCameraState(text) {
-  cameraStateText.textContent = text;
+function showCameraState(key, params) {
+  cameraErrorKey = key;
+  cameraErrorParams = params;
+  cameraStateText.textContent = t(key, params);
   cameraState.hidden = false;
   shutterBtn.disabled = true;
 }
@@ -94,7 +131,7 @@ async function toggleTorch() {
     torchBtn.setAttribute('aria-pressed', String(torchOn));
   } catch {
     torchOn = false;
-    toast('Фонарик недоступен');
+    toast(t('cam.torchNA'));
   }
 }
 
@@ -115,15 +152,14 @@ async function takePhoto() {
   try {
     const w = video.videoWidth;
     const h = video.videoHeight;
-    if (!w || !h) throw new Error('Камера ещё не готова');
+    if (!w || !h) throw new Error(t('cam.notReady'));
 
     canvas.width = w;
     canvas.height = h;
     canvas.getContext('2d').drawImage(video, 0, 0, w, h);
 
     const blob = await new Promise((res, rej) =>
-      canvas.toBlob((b) => (b ? res(b) : rej(new Error('Не удалось создать изображение'))),
-        'image/jpeg', JPEG_QUALITY));
+      canvas.toBlob((b) => (b ? res(b) : rej(new Error(t('cam.imgFail')))), 'image/jpeg', JPEG_QUALITY));
 
     flash();
     navigator.vibrate?.(30);
@@ -134,16 +170,16 @@ async function takePhoto() {
 
     // Сохранение на устройство (аналог MediaStore → Pictures/)
     if (isIOS) {
-      toast('Снимок сохранён. Откройте его и нажмите «Сохранить в галерею»');
+      toast(t('save.iosHint'));
     } else {
       downloadBlob(blob, photo.name);
-      toast('Снимок сохранён в галерею');
+      toast(t('save.done'));
     }
 
     openRecognize(photo);                 // автопереход в раздел «Распознать»
   } catch (err) {
     console.error('Photo capture failed', err);
-    toast(`Ошибка съёмки: ${err.message}`);
+    toast(t('cam.captureFail', { msg: err.message }));
   } finally {
     shutterBtn.classList.remove('busy');
     shutterBtn.disabled = !stream || section !== 'camera';
@@ -186,7 +222,7 @@ async function shareBlob(blob, name) {
   try {
     await navigator.share({ files: [file], title: name });
   } catch (err) {
-    if (err.name !== 'AbortError') toast('Не удалось открыть меню «Поделиться»');
+    if (err.name !== 'AbortError') toast(t('save.shareFail'));
   }
   return true;
 }
@@ -194,7 +230,7 @@ async function shareBlob(blob, name) {
 async function saveToDevice(photo) {
   if (isIOS && await shareBlob(photo.blob, photo.name)) return;
   downloadBlob(photo.blob, photo.name);
-  toast('Снимок сохранён в галерею');
+  toast(t('save.done'));
 }
 
 /* ================= Внутренняя галерея (IndexedDB) ================= */
@@ -210,10 +246,10 @@ const db = (() => {
   const tx = async (mode, fn) => {
     const d = await open();
     return new Promise((res, rej) => {
-      const t = d.transaction('photos', mode);
-      const req = fn(t.objectStore('photos'));
-      t.oncomplete = () => res(req?.result);
-      t.onerror = () => rej(t.error);
+      const tr = d.transaction('photos', mode);
+      const req = fn(tr.objectStore('photos'));
+      tr.oncomplete = () => res(req?.result);
+      tr.onerror = () => rej(tr.error);
     });
   };
   return {
@@ -226,10 +262,12 @@ const db = (() => {
 })();
 
 let thumbUrl = null;
+let photoCount = 0;
 async function refreshThumb(animate = false) {
   let photos = [];
   try { photos = await db.all(); } catch { /* приватный режим и т.п. */ }
   const last = photos.at(-1);
+  photoCount = photos.length;
 
   if (thumbUrl) URL.revokeObjectURL(thumbUrl);
   thumbUrl = last ? URL.createObjectURL(last.blob) : null;
@@ -239,7 +277,7 @@ async function refreshThumb(animate = false) {
 
   galleryCount.hidden = photos.length === 0;
   galleryCount.textContent = photos.length > 99 ? '99+' : photos.length;
-  galleryBtn.setAttribute('aria-label', `Открыть галерею снимков, ${photos.length}`);
+  galleryBtn.setAttribute('aria-label', t('cam.galleryN', { n: photos.length }));
 
   if (animate) {
     galleryBtn.classList.remove('pop');
@@ -261,8 +299,12 @@ async function openGallery() {
     const li = document.createElement('li');
     const b = document.createElement('button');
     b.type = 'button';
-    b.setAttribute('aria-label', `Снимок ${p.name}`);
-    b.innerHTML = `<img src="${url}" alt="" loading="lazy">`;
+    b.setAttribute('aria-label', t('gal.item', { name: p.name }));
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = '';
+    img.loading = 'lazy';
+    b.append(img);
     b.onclick = () => openViewer(p.id);
     li.append(b);
     return li;
@@ -308,16 +350,22 @@ function setSection(name) {
   $('cameraControls').hidden = !isCam;
   document.querySelector('.viewfinder').hidden = !isCam;
   $('recognize').hidden = name !== 'recognize';
-  $('recControls').hidden = name !== 'recognize';
+  $('translateView').hidden = name !== 'translate';
+  $('recControls').hidden = name !== 'recognize' && name !== 'translate';
+  $('settings').hidden = name !== 'settings';
+  if (name === 'settings') renderAbout();
 
+  markMenu(name);
+  stopSpeaking();
+  if (isCam) startCamera(); else stopCamera();   // камера не держится включённой в других разделах
+}
+
+function markMenu(name) {
   document.querySelectorAll('.menu-item').forEach((m) => {
     const on = m.dataset.section === name;
     m.classList.toggle('active', on);
     if (on) m.setAttribute('aria-current', 'page'); else m.removeAttribute('aria-current');
   });
-
-  stopSpeaking();
-  if (isCam) startCamera(); else stopCamera();   // камера не держится включённой в других разделах
 }
 
 /* ================= Распознавание ================= */
@@ -326,6 +374,11 @@ let recPhoto = null;        // снимок, открытый в разделе 
 let recBitmap = null;       // его изображение для отрисовки
 let recToken = 0;           // защита от устаревших результатов
 let overlayMode = 'letters';
+let recStd = settings.defaultStd;     // стандарт, в котором показан текущий снимок
+let recView = null;                   // { std, text, pinyin, note } — текст после перевода из Брайля
+let cellLabelFn = classLabel;         // подписи клеток на фото для текущего стандарта
+let recDirty = false;                 // настройки изменились — перевести заново
+let progressKey = null;               // текущая надпись прогресса (для смены языка)
 const recCanvas = $('recCanvas');
 const ROW_COLORS = ['#ffc83d', '#4fd1ff'];   // чередование цветов по строкам
 
@@ -333,9 +386,13 @@ async function openRecognize(photo) {
   setSection('recognize');
   const token = ++recToken;
   recPhoto = photo;
+  recView = null;
+  recStd = photo.result?.std || settings.defaultStd;
+  markStd(recStd);
   $('recEmpty').hidden = true;
   $('recResult').hidden = false;
   renderText(null);
+  renderAi();
 
   recBitmap?.close?.();
   recBitmap = await createImageBitmap(photo.blob);
@@ -350,7 +407,7 @@ async function openRecognize(photo) {
 }
 
 async function runRecognition(photo, token) {
-  setProgress('Распознавание…');
+  setProgress(t('rec.progress'));
   $('recStatus').textContent = '';
   try {
     const result = await recognize(photo.blob, (p, label) => {
@@ -361,7 +418,7 @@ async function runRecognition(photo, token) {
     result.at = Date.now();
     photo.result = result;
     db.put(photo).catch(() => {});         // сохраняем результат вместе со снимком
-    renderResult(result);
+    await renderResult(result, { fresh: true });
     announce(result);
   } catch (err) {
     console.error(err);
@@ -384,21 +441,121 @@ function hideProgress() {
   document.querySelector('[data-section="recognize"]').classList.remove('busy');
 }
 
-function renderResult(r) {
+async function renderResult(r, { fresh = false } = {}) {
   hideProgress();
   drawOverlay();
-  renderText(r);
-  const n = r.cells.length;
-  $('recStatus').textContent = n
-    ? `${n} ${plural(n, 'символ', 'символа', 'символов')} · ${r.lines} ${plural(r.lines, 'строка', 'строки', 'строк')} · ${(r.ms / 1000).toFixed(1).replace('.', ',')} с${r.backend ? ' · ' + r.backend : ''}`
-    : 'Символы не найдены';
+  renderStatus();
+  await applyStandard(recStd);
+  // автоматическое исправление сразу после распознавания
+  if (fresh && settings.autoFix && settings.fixMode !== 'off' && AI_LANGS.includes(recStd)) {
+    runFix({ auto: true });
+  }
 }
 
-function renderText(r) {
-  $('recText').textContent = r ? (r.text || '') : '';
-  $('recBraille').textContent = r ? (r.braille || '') : '';
-  if (r && !r.cells.length) $('recText').textContent = 'Брайль не найден. Снимите страницу ближе, ровно и при боковом освещении.';
+function renderStatus() {
+  const r = recPhoto?.result;
+  if (!r) { $('recStatus').textContent = ''; return; }
+  const n = r.cells.length;
+  $('recStatus').textContent = n
+    ? `${n} ${plural(n, 'rec.symbols')} · ${r.lines} ${plural(r.lines, 'rec.lines')} · ${fmt(r.ms / 1000)} ${t('rec.sec')}${r.backend ? ' · ' + r.backend : ''}`
+    : t('rec.none');
 }
+
+/** Состояние ИИ для снимка и стандарта: { fix: {...}, tr: {...} } */
+function aiState(create = false) {
+  const r = recPhoto?.result;
+  if (!r) return null;
+  if (create) { r.ai ??= {}; r.ai[recStd] ??= {}; }
+  return r.ai?.[recStd] || null;
+}
+
+/** Текст, который видит пользователь: исправленный (если принят) или исходный. */
+function displayedText() {
+  const fix = aiState()?.fix;
+  return fix?.accepted ? fix.text : (recView?.text || '');
+}
+
+function renderText(view, r = recPhoto?.result) {
+  const std = STANDARDS[recStd];
+  const recText = $('recText');
+  recText.lang = view?.text && view.pinyin && view.text === view.pinyin ? 'zh-Latn' : std.speech;
+
+  const fix = aiState()?.fix;
+  if (view && fix?.accepted && fix.base === view.text) {
+    renderDiff(recText, view.text, fix.text);
+    $('fixAppliedText').textContent = t('ai.fixedNote', { src: t(`ai.src.${fix.source}`) });
+    $('fixAppliedNote').hidden = false;
+  } else {
+    recText.textContent = view ? (view.text || '') : '';
+    $('fixAppliedNote').hidden = true;
+  }
+  $('recBraille').textContent = r ? (r.braille || '') : '';
+  $('pinyinBlock').hidden = !(view?.pinyin && view.pinyin !== view.text);
+  $('recPinyin').textContent = view?.pinyin || '';
+  $('recNote').hidden = !view?.note;
+  $('recNote').textContent = view?.note || '';
+  if (r && !r.cells.length) recText.textContent = t('rec.notFound');
+}
+
+/** Текст с подсветкой изменённых слов. */
+function renderDiff(el, oldText, newText) {
+  el.replaceChildren(...diffWords(oldText, newText).map((p) => {
+    if (!p.changed) return document.createTextNode(p.text);
+    const m = document.createElement('mark');
+    m.textContent = p.text;
+    return m;
+  }));
+}
+
+/* ---------- Стандарты Брайля: перевод без повторного запуска модели ---------- */
+
+function markStd(std) {
+  document.querySelectorAll('#stdSeg button').forEach((b) =>
+    b.setAttribute('aria-checked', String(b.dataset.std === std)));
+  $('stdName').textContent = STANDARDS[std].name;
+}
+
+async function applyStandard(std) {
+  const r = recPhoto?.result;
+  recStd = std;
+  recDirty = false;
+  markStd(std);
+  renderAi();
+  if (!r) return;
+
+  const token = recToken;
+  const card = document.querySelector('.rec-card');
+  card.classList.add('rec-busy');
+  let view;
+  try {
+    view = { std, ...(await translate(r.braille, std, settings)) };
+  } catch (err) {
+    console.error(err);
+    view = std === 'ru'
+      ? { std, text: r.text, note: t('rec.louisFallback') }
+      : { std, text: '', note: t('rec.translateFail', { msg: err.message }) };
+  }
+  try { cellLabelFn = await labeler(std); } catch { cellLabelFn = classLabel; }
+  card.classList.remove('rec-busy');
+  if (token !== recToken || recPhoto?.result !== r || recStd !== std) return;
+
+  recView = view;
+  renderText(view, r);
+  renderAi();
+  drawOverlay();
+  if (r.std !== std) {                     // запоминаем выбор для этого снимка
+    r.std = std;
+    db.put(recPhoto).catch(() => {});
+  }
+}
+
+document.querySelectorAll('#stdSeg button').forEach((b) => {
+  b.addEventListener('click', () => {
+    if (b.dataset.std === recStd && recView) return;
+    stopSpeaking();
+    applyStandard(b.dataset.std);
+  });
+});
 
 function showRecEmpty() {
   recToken++;
@@ -409,9 +566,208 @@ function showRecEmpty() {
 }
 
 function announce(r) {
-  if (!r.cells.length) return toast('Брайль не найден на снимке');
-  toast(`Распознано: ${r.cells.length} ${plural(r.cells.length, 'символ', 'символа', 'символов')}`);
+  if (!r.cells.length) return toast(t('rec.notFoundToast'));
+  toast(t('rec.done', { n: r.cells.length, w: plural(r.cells.length, 'rec.symbols') }));
 }
+
+/* ---------- ИИ-агент: исправление и перевод (RU / EN) ---------- */
+
+const otherLang = (std) => (std === 'ru' ? 'en' : 'ru');
+let aiBusy = null;   // 'fix' | 'tr' | null
+
+function renderAi() {
+  const ok = AI_LANGS.includes(recStd) && !!recPhoto?.result?.cells?.length;
+  $('aiRow').hidden = !ok;
+  const to = otherLang(recStd);
+  $('translateLabel').textContent = t('ai.translateTo', { lang: to.toUpperCase() });
+  $('fixBtn').querySelector('span').textContent = aiBusy === 'fix' ? t('ai.fixing') : t('ai.fix');
+  $('fixBtn').disabled = aiBusy === 'fix';
+
+  const st = ok ? aiState() : null;
+  const fix = st?.fix;
+  const base = recView?.text || '';
+  // блок предложенного исправления — пока пользователь не принял и не отклонил
+  const pending = fix && !fix.accepted && !fix.dismissed && fix.base === base && fix.changes?.length;
+  $('fixBlock').hidden = !pending;
+  if (pending) {
+    renderDiff($('fixText'), fix.base, fix.text);
+    $('fixSource').textContent = `· ${t(`ai.src.${fix.source}`)}`;
+    $('fixText').lang = STANDARDS[recStd].speech;
+    $('fixNote').hidden = false;
+    $('fixNote').textContent = t('ai.changes', { n: fix.changes.length });
+  }
+}
+
+async function runFix({ auto = false } = {}) {
+  if (!AI_LANGS.includes(recStd)) return toast(t('ai.onlyRuEn'));
+  if (settings.fixMode === 'off') return toast(t('ai.off'));
+  const r = recPhoto?.result;
+  const base = recView?.text;
+  if (!r || !base || aiBusy) return;
+  const token = recToken, std = recStd;
+  aiBusy = 'fix';
+  renderAi();
+  try {
+    const res = await correct({ result: r, std, text: base, settings });
+    if (token !== recToken || std !== recStd) return;
+    const changed = res.text.trim() !== base.trim() && res.changes?.length;
+    const st = aiState(true);
+    st.fix = { ...res, base, accepted: auto && !!changed, dismissed: false, at: Date.now() };
+    db.put(recPhoto).catch(() => {});
+    if (!changed) toast(t('ai.noChanges'));
+    else if (auto) toast(t('ai.changes', { n: res.changes.length }));
+    renderText(recView, r);
+  } catch (err) {
+    console.error(err);
+    toast(t('ai.fail', { msg: err.message }));
+  } finally {
+    aiBusy = null;
+    renderAi();
+  }
+}
+
+/* ---------- Окно «Перевод»: построчно, как оригинал, + Брайль целевого языка ---------- */
+
+let trProgressText = '';
+
+/** Ждёт, пока снимок распознан и текст переведён из Брайля (или выяснилось, что текста нет). */
+function waitForText(timeoutMs = 180000) {
+  const t0 = Date.now();
+  return new Promise((res) => {
+    const tick = () => {
+      const r = recPhoto?.result;
+      if ((r && (!r.cells.length || recView)) || !recPhoto || Date.now() - t0 > timeoutMs) return res();
+      setTimeout(tick, 150);
+    };
+    tick();
+  });
+}
+
+const trFresh = (tr) => tr && tr.base === displayedText();
+
+function renderTranslateView() {
+  const r = recPhoto?.result;
+  const ready = r && recView && r.cells.length;
+  const empty = !recPhoto || (r && !r.cells.length) ? t('tr.empty')
+    : (ready && !AI_LANGS.includes(recStd) ? t('tr.onlyRuEn') : '');
+  $('trEmpty').hidden = !empty;
+  $('trEmpty').textContent = empty;
+  $('trResult').hidden = !!empty;
+  $('trRefresh').hidden = !!empty || !ready;
+  if (empty) { $('trStatus').textContent = ''; return; }
+
+  const from = recStd, to = otherLang(recStd);
+  $('trStatus').textContent = t('tr.dir', { from: STANDARDS[from].label, to: STANDARDS[to].label });
+  $('trSrcLang').textContent = `· ${STANDARDS[from].label}`;
+  $('trOriginal').textContent = ready ? displayedText() : '';
+  $('trOriginal').lang = STANDARDS[from].speech;
+
+  const tr = ready ? aiState()?.tr : null;
+  const ok = trFresh(tr);
+  $('trTextTitle').textContent = t('tr.text', { lang: STANDARDS[to].label });
+  $('trSource').textContent = ok ? `· ${t(`ai.src.${tr.source}`)}` : '';
+  $('trText').textContent = ok ? tr.text : '';
+  $('trText').lang = STANDARDS[to].speech;
+  const grade = to === 'en' ? ` · ${settings.enGrade === 'g1' ? 'Grade 1' : 'Grade 2'}` : '';
+  $('trBrailleTitle').textContent = t('tr.braille', { std: STANDARDS[to].name + grade });
+  $('trBraille').textContent = ok ? (tr.braille || '') : '';
+
+  const busy = aiBusy === 'tr' || !ready;
+  $('trProgress').hidden = !busy;
+  $('trProgressText').textContent = !ready ? t('rec.progress') : (trProgressText || t('ai.translating'));
+  $('trRefresh').disabled = busy;
+
+  // Брайль перевода пересчитываем, если сменился уровень английского
+  if (ok && to === 'en' && tr.grade !== settings.enGrade) refreshTrBraille(tr);
+}
+
+async function refreshTrBraille(tr) {
+  tr.grade = settings.enGrade;
+  try {
+    tr.braille = await toBraille(tr.text, tr.to, settings);
+    db.put(recPhoto).catch(() => {});
+  } catch (err) { console.error(err); }
+  if (section === 'translate') renderTranslateView();
+}
+
+/** Открывает окно перевода для текущего (или последнего) снимка и переводит, если нужно. */
+async function openTranslate({ force = false } = {}) {
+  if (!recPhoto) {
+    const last = (await db.all()).at(-1);
+    if (last) openRecognize(last);           // распознавание идёт, пока открыто окно перевода
+  }
+  setSection('translate');
+  renderTranslateView();
+  if (!recPhoto) return;
+  await waitForText();
+  if (section !== 'translate') return;
+  renderTranslateView();
+  if (!recPhoto?.result?.cells?.length || !AI_LANGS.includes(recStd)) return;
+  if (force || !trFresh(aiState()?.tr)) runTranslate();
+}
+
+async function runTranslate() {
+  if (!AI_LANGS.includes(recStd)) return toast(t('ai.onlyRuEn'));
+  if (settings.trMode === 'off') return toast(t('ai.off'));
+  const text = displayedText();
+  if (!text || aiBusy) return;
+  const token = recToken, std = recStd, to = otherLang(std);
+  aiBusy = 'tr';
+  trProgressText = '';
+  renderTranslateView();
+  try {
+    const res = await translateText({
+      text, from: std, to, settings,
+      onProgress: (p) => {
+        if (token !== recToken) return;
+        trProgressText = t('ai.mtLoading', { p: `${Math.round(p * 100)}%` });
+        if (section === 'translate') $('trProgressText').textContent = trProgressText;
+      },
+    });
+    if (token !== recToken || std !== recStd) return;
+    const braille = await toBraille(res.text, to, settings).catch(() => '');
+    aiState(true).tr = { ...res, to, base: text, braille, grade: settings.enGrade, at: Date.now() };
+    db.put(recPhoto).catch(() => {});
+  } catch (err) {
+    console.error(err);
+    toast(t('ai.fail', { msg: err.message }));
+  } finally {
+    aiBusy = null;
+    trProgressText = '';
+    if (section === 'translate') renderTranslateView();
+  }
+}
+
+$('fixBtn').addEventListener('click', () => runFix());
+$('translateBtn').addEventListener('click', () => openTranslate());
+$('trRefresh').addEventListener('click', () => openTranslate({ force: true }));
+$('fixApply').addEventListener('click', () => {
+  const fix = aiState()?.fix;
+  if (!fix) return;
+  fix.accepted = true;
+  db.put(recPhoto).catch(() => {});
+  renderText(recView);
+  renderAi();
+  toast(t('ai.applied'));
+});
+$('fixDismiss').addEventListener('click', () => {
+  const fix = aiState()?.fix;
+  if (!fix) return;
+  fix.dismissed = true;
+  db.put(recPhoto).catch(() => {});
+  renderAi();
+});
+$('fixUndo').addEventListener('click', () => {
+  const fix = aiState()?.fix;
+  if (!fix) return;
+  fix.accepted = false;
+  fix.dismissed = false;           // снова предлагаем исправление
+  db.put(recPhoto).catch(() => {});
+  renderText(recView);
+  renderAi();
+});
+
+/* ---------- Фото с разметкой ---------- */
 
 /** Фото + рамки распознанных ячеек с подписями. */
 function drawOverlay() {
@@ -437,7 +793,7 @@ function drawOverlay() {
     ctx.strokeRect(x, y, w, h);
     if (overlayMode === 'boxes') continue;
 
-    const label = overlayMode === 'braille' ? brailleChar(cls) : classLabel(cls);
+    const label = overlayMode === 'braille' ? brailleChar(cls) : cellLabelFn(cls);
     const fs = Math.max(10, Math.min(w * 0.95, h * 0.6));
     ctx.font = `600 ${fs}px system-ui, sans-serif`;
     const tw = Math.max(ctx.measureText(label).width + fs * 0.3, fs * 0.9);
@@ -449,10 +805,10 @@ function drawOverlay() {
   }
 }
 
-document.querySelectorAll('.seg button').forEach((b) => {
+document.querySelectorAll('#overlaySeg button').forEach((b) => {
   b.addEventListener('click', () => {
     overlayMode = b.dataset.mode;
-    document.querySelectorAll('.seg button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+    document.querySelectorAll('#overlaySeg button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
     drawOverlay();
   });
 });
@@ -460,41 +816,131 @@ document.querySelectorAll('.seg button').forEach((b) => {
 $('recRetry').addEventListener('click', () => recPhoto && runRecognition(recPhoto, ++recToken));
 $('newPhotoBtn').addEventListener('click', () => setSection('camera'));
 
-$('copyBtn').addEventListener('click', async () => {
-  const t = recPhoto?.result?.text;
-  if (!t) return toast('Нет текста для копирования');
+/* ---------- Копирование и озвучивание ---------- */
+
+async function copyText(text) {
+  if (!text) return toast(t('rec.noText'));
   try {
-    await navigator.clipboard.writeText(t);
-    toast('Текст скопирован');
+    await navigator.clipboard.writeText(text);
+    toast(t('rec.copied'));
   } catch {
-    toast('Не удалось скопировать');
+    toast(t('rec.copyFail'));
   }
-});
+}
 
 function stopSpeaking() {
   window.speechSynthesis?.cancel();
   $('speakBtn').setAttribute('aria-pressed', 'false');
 }
 
-$('speakBtn').addEventListener('click', () => {
-  const t = recPhoto?.result?.text;
-  if (!window.speechSynthesis) return toast('Озвучивание не поддерживается');
-  if ($('speakBtn').getAttribute('aria-pressed') === 'true') return stopSpeaking();
-  if (!t) return toast('Нет текста для озвучивания');
-  const u = new SpeechSynthesisUtterance(t);
-  u.lang = 'ru-RU';
+function speak(text, lang) {
+  if (!window.speechSynthesis) return toast(t('rec.ttsNA'));
+  if (!text) return toast(t('rec.noText'));
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang;
   u.onend = u.onerror = () => $('speakBtn').setAttribute('aria-pressed', 'false');
   speechSynthesis.cancel();
   speechSynthesis.speak(u);
   $('speakBtn').setAttribute('aria-pressed', 'true');
+}
+
+/** Текст и язык для кнопок «Копировать» / «Озвучить»: в окне перевода — перевод. */
+function activeText() {
+  const tr = aiState()?.tr;
+  if (section === 'translate') return trFresh(tr) ? { text: tr.text, lang: STANDARDS[tr.to].speech } : { text: '' };
+  return { text: displayedText(), lang: STANDARDS[recStd].speech };
+}
+
+$('copyBtn').addEventListener('click', () => copyText(activeText().text));
+$('speakBtn').addEventListener('click', () => {
+  if ($('speakBtn').getAttribute('aria-pressed') === 'true') return stopSpeaking();
+  const { text, lang } = activeText();
+  speak(text, lang);
 });
 
-function plural(n, one, few, many) {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return one;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
-  return many;
+/* ================= Раздел «Настройки» ================= */
+
+function bindRadio(name, key, onChange) {
+  document.querySelectorAll(`input[name="${name}"]`).forEach((i) => {
+    i.checked = i.value === settings[key];
+    i.addEventListener('change', () => {
+      settings[key] = i.value;
+      saveSettings();
+      onChange?.(i.value);
+    });
+  });
 }
+
+function bindCheckbox(id, key, onChange) {
+  const el = $(id);
+  el.checked = !!settings[key];
+  el.addEventListener('change', () => {
+    settings[key] = el.checked;
+    saveSettings();
+    onChange?.(el.checked);
+  });
+}
+
+function initSettingsForm() {
+  bindRadio('uiLang', 'uiLang', (l) => applyUiLang(l));
+  bindRadio('defStd', 'defaultStd', (v) => toast(t('set.defToast', { std: STANDARDS[v].label })));
+  bindRadio('enGrade', 'enGrade', () => { recDirty = true; });
+  bindRadio('fixMode', 'fixMode');
+  bindRadio('trMode', 'trMode');
+  bindCheckbox('zhHanzi', 'zhHanzi', () => { recDirty = true; });
+  bindCheckbox('autoFix', 'autoFix');
+
+  for (const [id, key] of [['agentUrl', 'agentUrl'], ['agentToken', 'agentToken']]) {
+    const el = $(id);
+    el.value = settings[key] || '';
+    el.addEventListener('change', () => { settings[key] = el.value.trim(); saveSettings(); });
+  }
+  $('agentCheck').addEventListener('click', async () => {
+    const st = $('agentStatus');
+    st.className = 'set-status';
+    st.textContent = t('set.checking');
+    try {
+      const h = await checkAgent(settings);
+      st.textContent = h.ok
+        ? t('set.agentOk', { provider: h.provider, model: h.model })
+        : t('set.agentNoKey', { msg: h.error });
+      st.classList.add(h.ok ? 'ok' : 'warn');
+    } catch (err) {
+      st.textContent = err.message;
+      st.classList.add('warn');
+    }
+  });
+}
+
+let louisVer = '';
+async function renderAbout() {
+  $('aboutText').textContent = t('set.about', { v: louisVer || '' }).replace('  ', ' ');
+  if (louisVer) return;
+  try {
+    louisVer = await louisVersion();
+    $('aboutText').textContent = t('set.about', { v: louisVer });
+  } catch { /* liblouis ещё не загружен */ }
+}
+
+/** Смена языка интерфейса: разметка + все тексты, собранные в коде. */
+function applyUiLang(l) {
+  setLang(l);
+  if (cameraErrorKey) cameraStateText.textContent = t(cameraErrorKey, cameraErrorParams);
+  galleryBtn.setAttribute('aria-label', t('cam.galleryN', { n: photoCount }));
+  markStd(recStd);
+  renderStatus();
+  renderAi();
+  if (recView) {
+    // заметки, сформированные переводчиком Брайля, пересоздаём на новом языке
+    if (recView.note) applyStandard(recStd); else renderText(recView);
+  }
+  if (section === 'settings') renderAbout();
+  if (section === 'translate') renderTranslateView();
+  $('agentStatus').textContent = '';
+}
+
+initSettingsForm();
+markStd(recStd);
 
 /* ================= Уведомления ================= */
 
@@ -536,29 +982,41 @@ $('deleteBtn').addEventListener('click', async () => {
   closeViewer();
   await refreshThumb();
   if (!$('gallery').hidden) openGallery();
-  toast('Снимок удалён из приложения');
+  toast(t('view.deleted'));
 });
+
+/** Открывает «Распознать» с текущим или последним снимком. */
+async function showRecognizeSection() {
+  if (recPhoto) {
+    setSection('recognize');
+    if (recDirty && recPhoto.result) await applyStandard(recStd);
+    return true;
+  }
+  const last = (await db.all()).at(-1);
+  if (last) { await openRecognize(last); return true; }
+  setSection('recognize');
+  showRecEmpty();
+  return false;
+}
 
 // Меню приложения
 document.querySelectorAll('.menu-item').forEach((item) => {
   item.addEventListener('click', async () => {
     const name = item.dataset.section;
-    if (item.dataset.soon !== undefined) return toast(`Раздел «${item.textContent.trim()}» в разработке`);
+    if (item.dataset.soon !== undefined) return toast(t('menu.soon', { name: item.textContent.trim() }));
     if (name === 'camera') return setSection('camera');
-    if (name === 'recognize') {
-      if (recPhoto) return setSection('recognize');
-      const last = (await db.all()).at(-1);
-      return last ? openRecognize(last) : (setSection('recognize'), showRecEmpty());
-    }
+    if (name === 'settings') return setSection('settings');
+    if (name === 'recognize') return showRecognizeSection();
+    if (name === 'translate') return openTranslate();
   });
 });
 
-// Клавиши: пробел/Enter — снимок, Esc — закрыть окна
+// Клавиши: пробел — снимок, Esc — закрыть окна
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (!$('viewer').hidden) closeViewer();
     else if (!$('gallery').hidden) closeGallery();
-    else if (section === 'recognize') setSection('camera');
+    else if (section !== 'camera') setSection('camera');
   }
   if ((e.key === ' ' || e.key === 'VolumeUp') && $('viewer').hidden && $('gallery').hidden &&
       section === 'camera' &&

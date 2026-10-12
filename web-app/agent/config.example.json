@@ -1,0 +1,7 @@
+{
+  "provider": "anthropic",
+  "model": "claude-haiku-5-5",
+  "api_key_env": "ANTHROPIC_API_KEY",
+  "max_chars": 6000,
+  "access_token": ""
+}

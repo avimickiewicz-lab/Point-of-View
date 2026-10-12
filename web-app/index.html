@@ -14,17 +14,18 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Тексты интерфейса задаются атрибутами data-i18n* и переводятся в i18n.js -->
   <div class="app">
 
     <!-- ===== Видоискатель ===== -->
-    <main class="viewfinder" aria-label="Видоискатель камеры">
+    <main class="viewfinder" data-i18n-aria="cam.viewfinder">
       <video id="video" autoplay playsinline muted aria-hidden="true"></video>
 
       <!-- Рамка-прицел для текста Брайля -->
       <div class="frame" aria-hidden="true">
         <span class="c tl"></span><span class="c tr"></span>
         <span class="c bl"></span><span class="c br"></span>
-        <p class="frame-hint">Поместите текст Брайля в рамку</p>
+        <p class="frame-hint" data-i18n="cam.hint"></p>
       </div>
 
       <!-- Верхняя панель -->
@@ -33,15 +34,15 @@
           <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="8" cy="6" r="2.2"/><circle cx="8" cy="12" r="2.2"/><circle cx="16" cy="12" r="2.2"/><circle cx="16" cy="18" r="2.2"/></svg>
           <span>Point of view</span>
         </div>
-        <button id="torchBtn" class="icon-btn" type="button" aria-label="Фонарик" aria-pressed="false" hidden>
+        <button id="torchBtn" class="icon-btn" type="button" data-i18n-aria="cam.torch" aria-pressed="false" hidden>
           <svg viewBox="0 0 24 24"><path d="M7 2h10v4l-3 4v12h-4V10L7 6z"/></svg>
         </button>
       </header>
 
       <!-- Сообщение об ошибке / разрешении -->
       <div id="cameraState" class="camera-state" hidden>
-        <p id="cameraStateText">Нужен доступ к камере</p>
-        <button id="retryBtn" class="pill-btn" type="button">Разрешить камеру</button>
+        <p id="cameraStateText" data-i18n="cam.needAccess"></p>
+        <button id="retryBtn" class="pill-btn" type="button" data-i18n="cam.allow"></button>
       </div>
 
       <div id="flash" class="flash" aria-hidden="true"></div>
@@ -51,38 +52,224 @@
     <!-- ===== Раздел «Распознать» ===== -->
     <section id="recognize" class="recognize" aria-labelledby="recTitle" hidden>
       <header class="rec-head">
-        <h2 id="recTitle">Распознавание</h2>
+        <h2 id="recTitle" data-i18n="rec.title"></h2>
         <span id="recStatus" class="rec-status" aria-live="polite"></span>
       </header>
 
       <div class="rec-body">
-        <p id="recEmpty" class="empty" hidden>Сделайте снимок — распознанный текст появится здесь.</p>
+        <p id="recEmpty" class="empty" data-i18n="rec.empty" hidden></p>
 
         <div id="recResult">
           <!-- Предпросмотр на фотографии -->
           <figure class="rec-photo">
-            <canvas id="recCanvas" role="img" aria-label="Фотография с отмеченными символами Брайля"></canvas>
+            <canvas id="recCanvas" role="img" data-i18n-aria="rec.canvas"></canvas>
             <div id="recProgress" class="rec-progress" hidden>
               <span class="spinner" aria-hidden="true"></span>
-              <span id="recProgressText">Распознавание…</span>
-              <button id="recRetry" class="pill-btn" type="button" hidden>Повторить</button>
+              <span id="recProgressText"></span>
+              <button id="recRetry" class="pill-btn" type="button" data-i18n="common.retry" hidden></button>
             </div>
           </figure>
-          <div class="seg" role="radiogroup" aria-label="Подписи на фотографии">
-            <button type="button" role="radio" data-mode="letters" aria-checked="true">Буквы</button>
-            <button type="button" role="radio" data-mode="braille" aria-checked="false">Брайль</button>
-            <button type="button" role="radio" data-mode="boxes" aria-checked="false">Рамки</button>
-            <button type="button" role="radio" data-mode="none" aria-checked="false">Фото</button>
+          <div id="overlaySeg" class="seg" role="radiogroup" data-i18n-aria="rec.overlay">
+            <button type="button" role="radio" data-mode="letters" aria-checked="true" data-i18n="rec.ovLetters"></button>
+            <button type="button" role="radio" data-mode="braille" aria-checked="false" data-i18n="rec.ovBraille"></button>
+            <button type="button" role="radio" data-mode="boxes" aria-checked="false" data-i18n="rec.ovBoxes"></button>
+            <button type="button" role="radio" data-mode="none" aria-checked="false" data-i18n="rec.ovPhoto"></button>
           </div>
 
           <!-- Текстовый вид -->
           <article class="rec-card">
-            <h3>Текст</h3>
+            <div class="std-row">
+              <span id="stdLabel" class="std-label" data-i18n="rec.standard"></span>
+              <div id="stdSeg" class="seg std" role="radiogroup" aria-labelledby="stdLabel">
+                <button type="button" role="radio" data-std="ru" aria-checked="true" lang="ru">RU</button>
+                <button type="button" role="radio" data-std="en" aria-checked="false" lang="en">EN</button>
+                <button type="button" role="radio" data-std="zh" aria-checked="false" lang="zh">中文</button>
+              </div>
+            </div>
+            <p id="stdName" class="std-name"></p>
+
+            <h3 data-i18n="rec.text"></h3>
             <p id="recText" class="rec-text" lang="ru"></p>
-            <h3>Брайль (Unicode)</h3>
-            <p id="recBraille" class="rec-braille" aria-label="Запись символами Брайля"></p>
+            <div id="pinyinBlock" hidden>
+              <h3 data-i18n="rec.pinyin"></h3>
+              <p id="recPinyin" class="rec-text rec-pinyin" lang="zh-Latn"></p>
+            </div>
+            <p id="recNote" class="rec-note" hidden></p>
+            <p id="fixAppliedNote" class="rec-note" hidden>
+              <span id="fixAppliedText"></span>
+              <button id="fixUndo" class="link-btn" type="button" data-i18n="ai.undo"></button>
+            </p>
+
+            <!-- ИИ-агент: исправление и перевод (RU / EN) -->
+            <div id="aiRow" class="ai-row">
+              <button id="fixBtn" class="chip-btn" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19L15 9M14 5l1-2 1 2 2 1-2 1-1 2-1-2-2-1zM19 11l.7-1.3L21 9l-1.3-.7L19 7l-.7 1.3L17 9l1.3.7z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span data-i18n="ai.fix"></span>
+              </button>
+              <button id="translateBtn" class="chip-btn" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M8.5 4v3M6 7c.5 3 2.5 5.5 5.5 7M11 7c-.7 3.2-3 6-6.5 7.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M13 20l3.5-9 3.5 9M14.3 17h4.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span id="translateLabel"></span>
+              </button>
+            </div>
+
+            <div id="fixBlock" class="ai-block" hidden>
+              <h3><span data-i18n="ai.corrected"></span> <span id="fixSource" class="src-tag"></span></h3>
+              <p id="fixText" class="rec-text"></p>
+              <p id="fixNote" class="rec-note" hidden></p>
+              <div class="ai-actions">
+                <button id="fixApply" class="pill-btn small" type="button" data-i18n="ai.accept"></button>
+                <button id="fixDismiss" class="pill-btn small ghost" type="button" data-i18n="ai.dismiss"></button>
+              </div>
+            </div>
+
+            <h3 data-i18n="rec.braille"></h3>
+            <p id="recBraille" class="rec-braille" data-i18n-aria="rec.brailleAria"></p>
           </article>
         </div>
+      </div>
+    </section>
+
+    <!-- ===== Раздел «Перевод» (отдельное окно) ===== -->
+    <section id="translateView" class="recognize" aria-labelledby="trTitle" hidden>
+      <header class="rec-head tr-head">
+        <div>
+          <h2 id="trTitle" data-i18n="tr.title"></h2>
+          <span id="trStatus" class="rec-status" aria-live="polite"></span>
+        </div>
+        <button id="trRefresh" class="icon-btn" type="button" data-i18n-aria="tr.refresh">
+          <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7M20 4v4.5h-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </header>
+      <div class="rec-body">
+        <p id="trEmpty" class="empty" hidden></p>
+
+        <div id="trResult">
+          <article class="rec-card tr-src">
+            <h3><span data-i18n="tr.original"></span> <span id="trSrcLang" class="src-tag"></span></h3>
+            <p id="trOriginal" class="rec-text tr-lines"></p>
+          </article>
+
+          <article class="rec-card">
+            <div id="trProgress" class="tr-progress" hidden>
+              <span class="spinner" aria-hidden="true"></span>
+              <span id="trProgressText"></span>
+            </div>
+            <h3><span id="trTextTitle"></span> <span id="trSource" class="src-tag"></span></h3>
+            <p id="trText" class="rec-text tr-lines"></p>
+            <h3 id="trBrailleTitle"></h3>
+            <p id="trBraille" class="rec-braille" data-i18n-aria="rec.brailleAria"></p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Раздел «Настройки» ===== -->
+    <section id="settings" class="settings" aria-labelledby="setTitle" hidden>
+      <header class="rec-head">
+        <h2 id="setTitle" data-i18n="set.title"></h2>
+      </header>
+      <div class="rec-body">
+        <fieldset class="set-group">
+          <legend data-i18n="set.uiLang"></legend>
+          <label class="opt">
+            <input type="radio" name="uiLang" value="ru">
+            <span><b lang="ru">Русский</b></span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="uiLang" value="en">
+            <span><b lang="en">English</b></span>
+          </label>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend data-i18n="set.defStd"></legend>
+          <p class="set-hint" data-i18n="set.defStdHint"></p>
+          <label class="opt">
+            <input type="radio" name="defStd" value="ru">
+            <span><b data-i18n="std.ru.label"></b><small data-i18n="set.stdRuHint"></small></span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="defStd" value="en">
+            <span><b lang="en">English</b><small data-i18n="set.stdEnHint"></small></span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="defStd" value="zh">
+            <span><b lang="zh">中文</b><small data-i18n="set.stdZhHint"></small></span>
+          </label>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend data-i18n="set.enGrade"></legend>
+          <label class="opt">
+            <input type="radio" name="enGrade" value="g2">
+            <span><b data-i18n="set.g2"></b><small data-i18n="set.g2Hint"></small></span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="enGrade" value="g1">
+            <span><b data-i18n="set.g1"></b><small data-i18n="set.g1Hint"></small></span>
+          </label>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend data-i18n="set.ai"></legend>
+          <p class="set-hint" data-i18n="set.aiHint"></p>
+
+          <p class="set-sub" data-i18n="set.fixMode"></p>
+          <label class="opt">
+            <input type="radio" name="fixMode" value="off">
+            <span><b data-i18n="set.off"></b></span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="fixMode" value="local">
+            <span><b data-i18n="set.fixLocal"></b><small data-i18n="set.fixLocalHint"></small></span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="fixMode" value="server">
+            <span><b data-i18n="set.server"></b><small data-i18n="set.fixServerHint"></small></span>
+          </label>
+
+          <p class="set-sub" data-i18n="set.trMode"></p>
+          <label class="opt">
+            <input type="radio" name="trMode" value="off">
+            <span><b data-i18n="set.off"></b></span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="trMode" value="local">
+            <span><b data-i18n="set.trLocal"></b><small data-i18n="set.trLocalHint"></small></span>
+          </label>
+          <label class="opt">
+            <input type="radio" name="trMode" value="server">
+            <span><b data-i18n="set.server"></b><small data-i18n="set.trServerHint"></small></span>
+          </label>
+
+          <label class="opt switch">
+            <input type="checkbox" id="autoFix">
+            <span><b data-i18n="set.autoFix"></b><small data-i18n="set.autoFixHint"></small></span>
+          </label>
+
+          <label class="field">
+            <span data-i18n="set.agentUrl"></span>
+            <input id="agentUrl" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="/api/agent">
+          </label>
+          <label class="field">
+            <span data-i18n="set.agentToken"></span>
+            <input id="agentToken" type="password" autocomplete="off" spellcheck="false">
+          </label>
+          <div class="field-row">
+            <button id="agentCheck" class="pill-btn small ghost" type="button" data-i18n="set.check"></button>
+            <span id="agentStatus" class="set-status" aria-live="polite"></span>
+          </div>
+        </fieldset>
+
+        <fieldset class="set-group">
+          <legend data-i18n="set.zh"></legend>
+          <label class="opt switch">
+            <input type="checkbox" id="zhHanzi">
+            <span><b data-i18n="set.zhHanzi"></b><small data-i18n="set.zhHanziHint"></small></span>
+          </label>
+        </fieldset>
+
+        <p id="aboutText" class="set-about"></p>
       </div>
     </section>
 
@@ -90,57 +277,53 @@
     <footer class="dock">
       <!-- Ряд управления камерой -->
       <div id="cameraControls" class="controls">
-        <button id="galleryBtn" class="thumb-btn" type="button" aria-label="Открыть галерею снимков">
+        <button id="galleryBtn" class="thumb-btn" type="button" data-i18n-aria="cam.gallery">
           <img id="lastThumb" alt="" hidden>
           <svg class="thumb-placeholder" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z M4 15l4-4 4 4 3-3 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
           <span id="galleryCount" class="badge" hidden>0</span>
         </button>
 
-        <button id="shutterBtn" class="shutter" type="button" aria-label="Сделать фотографию" disabled>
+        <button id="shutterBtn" class="shutter" type="button" data-i18n-aria="cam.shutter" disabled>
           <span class="shutter-ring"></span>
           <span class="shutter-core"></span>
         </button>
 
-        <button id="switchBtn" class="icon-btn round" type="button" aria-label="Переключить камеру">
+        <button id="switchBtn" class="icon-btn round" type="button" data-i18n-aria="cam.switch">
           <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 13a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M14.5 9.2v2h-2M9.5 16.8v-2h2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
 
       <!-- Ряд управления раздела «Распознать» -->
       <div id="recControls" class="controls" hidden>
-        <button id="copyBtn" class="icon-btn round labeled" type="button" aria-label="Скопировать текст">
+        <button id="copyBtn" class="icon-btn round labeled" type="button" data-i18n-aria="rec.copy">
           <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
         </button>
-        <button id="newPhotoBtn" class="shutter alt" type="button" aria-label="Новый снимок">
+        <button id="newPhotoBtn" class="shutter alt" type="button" data-i18n-aria="rec.newPhoto">
           <span class="shutter-ring"></span>
           <span class="shutter-core"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
         </button>
-        <button id="speakBtn" class="icon-btn round" type="button" aria-label="Озвучить текст" aria-pressed="false">
+        <button id="speakBtn" class="icon-btn round" type="button" data-i18n-aria="rec.speak" aria-pressed="false">
           <svg viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6L8 10z" fill="currentColor"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </button>
       </div>
 
-      <!-- Зарезервированное место под меню приложения -->
-      <nav class="menu" aria-label="Меню приложения">
+      <!-- Меню приложения -->
+      <nav class="menu" data-i18n-aria="menu.label">
         <button class="menu-item active" type="button" data-section="camera" aria-current="page">
           <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-          <span>Камера</span>
+          <span data-i18n="menu.camera"></span>
         </button>
         <button class="menu-item" type="button" data-section="recognize">
           <svg viewBox="0 0 24 24"><circle cx="8" cy="6" r="1.8"/><circle cx="8" cy="12" r="1.8"/><circle cx="16" cy="12" r="1.8"/><circle cx="16" cy="18" r="1.8"/><circle cx="8" cy="18" r="1.8" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="16" cy="6" r="1.8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
-          <span>Распознать</span>
+          <span data-i18n="menu.recognize"></span>
         </button>
-        <button class="menu-item" type="button" data-section="translate" data-soon>
+        <button class="menu-item" type="button" data-section="translate">
           <svg viewBox="0 0 24 24"><path d="M4 7h9M8.5 4v3M6 7c.5 3 2.5 5.5 5.5 7M11 7c-.7 3.2-3 6-6.5 7.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M13 20l3.5-9 3.5 9M14.3 17h4.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span>Перевод</span>
+          <span data-i18n="menu.translate"></span>
         </button>
-        <button class="menu-item" type="button" data-section="history" data-soon>
-          <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v3.5h3.5M12 8v4.5l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span>История</span>
-        </button>
-        <button class="menu-item" type="button" data-section="settings" data-soon>
+        <button class="menu-item" type="button" data-section="settings">
           <svg viewBox="0 0 24 24"><path d="M5 7h14M5 17h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="9" cy="7" r="2.3" fill="var(--dock)" stroke="currentColor" stroke-width="1.7"/><circle cx="15" cy="17" r="2.3" fill="var(--dock)" stroke="currentColor" stroke-width="1.7"/></svg>
-          <span>Настройки</span>
+          <span data-i18n="menu.settings"></span>
         </button>
       </nav>
     </footer>
@@ -148,29 +331,29 @@
     <!-- ===== Галерея (нижний лист) ===== -->
     <section id="gallery" class="sheet" role="dialog" aria-modal="true" aria-labelledby="galleryTitle" hidden>
       <div class="sheet-head">
-        <h2 id="galleryTitle">Снимки</h2>
-        <button id="galleryClose" class="icon-btn" type="button" aria-label="Закрыть галерею">
+        <h2 id="galleryTitle" data-i18n="gal.title"></h2>
+        <button id="galleryClose" class="icon-btn" type="button" data-i18n-aria="gal.close">
           <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
       </div>
-      <p id="galleryEmpty" class="empty">Здесь появятся сделанные фотографии.</p>
+      <p id="galleryEmpty" class="empty" data-i18n="gal.empty"></p>
       <ul id="galleryGrid" class="grid"></ul>
     </section>
 
     <!-- ===== Просмотр снимка ===== -->
-    <section id="viewer" class="viewer" role="dialog" aria-modal="true" aria-label="Просмотр снимка" hidden>
+    <section id="viewer" class="viewer" role="dialog" aria-modal="true" data-i18n-aria="view.label" hidden>
       <div class="viewer-top">
-        <button id="viewerClose" class="icon-btn" type="button" aria-label="Назад">
+        <button id="viewerClose" class="icon-btn" type="button" data-i18n-aria="common.back">
           <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <span id="viewerName" class="viewer-name"></span>
       </div>
-      <img id="viewerImg" alt="Снимок">
+      <img id="viewerImg" alt="">
       <div class="viewer-actions">
-        <button id="recognizeBtn" class="pill-btn" type="button">Распознать</button>
-        <button id="saveBtn" class="pill-btn ghost" type="button">Сохранить в галерею</button>
-        <button id="shareBtn" class="pill-btn ghost" type="button" hidden>Поделиться</button>
-        <button id="deleteBtn" class="pill-btn danger" type="button">Удалить</button>
+        <button id="recognizeBtn" class="pill-btn" type="button" data-i18n="view.recognize"></button>
+        <button id="saveBtn" class="pill-btn ghost" type="button" data-i18n="view.save"></button>
+        <button id="shareBtn" class="pill-btn ghost" type="button" data-i18n="view.share" hidden></button>
+        <button id="deleteBtn" class="pill-btn danger" type="button" data-i18n="view.delete"></button>
       </div>
     </section>
 
