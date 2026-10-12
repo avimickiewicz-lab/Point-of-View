@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Point of view — распознавание шрифта Брайля по фотографии">
+  <title>Point of view</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- ===== Видоискатель ===== -->
+    <main class="viewfinder" aria-label="Видоискатель камеры">
+      <video id="video" autoplay playsinline muted aria-hidden="true"></video>
+
+      <!-- Рамка-прицел для текста Брайля -->
+      <div class="frame" aria-hidden="true">
+        <span class="c tl"></span><span class="c tr"></span>
+        <span class="c bl"></span><span class="c br"></span>
+        <p class="frame-hint">Поместите текст Брайля в рамку</p>
+      </div>
+
+      <!-- Верхняя панель -->
+      <header class="topbar">
+        <div class="brand" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="8" cy="6" r="2.2"/><circle cx="8" cy="12" r="2.2"/><circle cx="16" cy="12" r="2.2"/><circle cx="16" cy="18" r="2.2"/></svg>
+          <span>Point of view</span>
+        </div>
+        <button id="torchBtn" class="icon-btn" type="button" aria-label="Фонарик" aria-pressed="false" hidden>
+          <svg viewBox="0 0 24 24"><path d="M7 2h10v4l-3 4v12h-4V10L7 6z"/></svg>
+        </button>
+      </header>
+
+      <!-- Сообщение об ошибке / разрешении -->
+      <div id="cameraState" class="camera-state" hidden>
+        <p id="cameraStateText">Нужен доступ к камере</p>
+        <button id="retryBtn" class="pill-btn" type="button">Разрешить камеру</button>
+      </div>
+
+      <div id="flash" class="flash" aria-hidden="true"></div>
+    </main>
+
+
+    <!-- ===== Раздел «Распознать» ===== -->
+    <section id="recognize" class="recognize" aria-labelledby="recTitle" hidden>
+      <header class="rec-head">
+        <h2 id="recTitle">Распознавание</h2>
+        <span id="recStatus" class="rec-status" aria-live="polite"></span>
+      </header>
+
+      <div class="rec-body">
+        <p id="recEmpty" class="empty" hidden>Сделайте снимок — распознанный текст появится здесь.</p>
+
+        <div id="recResult">
+          <!-- Предпросмотр на фотографии -->
+          <figure class="rec-photo">
+            <canvas id="recCanvas" role="img" aria-label="Фотография с отмеченными символами Брайля"></canvas>
+            <div id="recProgress" class="rec-progress" hidden>
+              <span class="spinner" aria-hidden="true"></span>
+              <span id="recProgressText">Распознавание…</span>
+              <button id="recRetry" class="pill-btn" type="button" hidden>Повторить</button>
+            </div>
+          </figure>
+          <div class="seg" role="radiogroup" aria-label="Подписи на фотографии">
+            <button type="button" role="radio" data-mode="letters" aria-checked="true">Буквы</button>
+            <button type="button" role="radio" data-mode="braille" aria-checked="false">Брайль</button>
+            <button type="button" role="radio" data-mode="boxes" aria-checked="false">Рамки</button>
+            <button type="button" role="radio" data-mode="none" aria-checked="false">Фото</button>
+          </div>
+
+          <!-- Текстовый вид -->
+          <article class="rec-card">
+            <h3>Текст</h3>
+            <p id="recText" class="rec-text" lang="ru"></p>
+            <h3>Брайль (Unicode)</h3>
+            <p id="recBraille" class="rec-braille" aria-label="Запись символами Брайля"></p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Нижняя панель ===== -->
+    <footer class="dock">
+      <!-- Ряд управления камерой -->
+      <div id="cameraControls" class="controls">
+        <button id="galleryBtn" class="thumb-btn" type="button" aria-label="Открыть галерею снимков">
+          <img id="lastThumb" alt="" hidden>
+          <svg class="thumb-placeholder" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4z M4 15l4-4 4 4 3-3 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          <span id="galleryCount" class="badge" hidden>0</span>
+        </button>
+
+        <button id="shutterBtn" class="shutter" type="button" aria-label="Сделать фотографию" disabled>
+          <span class="shutter-ring"></span>
+          <span class="shutter-core"></span>
+        </button>
+
+        <button id="switchBtn" class="icon-btn round" type="button" aria-label="Переключить камеру">
+          <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 13a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M14.5 9.2v2h-2M9.5 16.8v-2h2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+
+      <!-- Ряд управления раздела «Распознать» -->
+      <div id="recControls" class="controls" hidden>
+        <button id="copyBtn" class="icon-btn round labeled" type="button" aria-label="Скопировать текст">
+          <svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+        </button>
+        <button id="newPhotoBtn" class="shutter alt" type="button" aria-label="Новый снимок">
+          <span class="shutter-ring"></span>
+          <span class="shutter-core"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+        </button>
+        <button id="speakBtn" class="icon-btn round" type="button" aria-label="Озвучить текст" aria-pressed="false">
+          <svg viewBox="0 0 24 24"><path d="M4 10v4h4l5 4V6L8 10z" fill="currentColor"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+
+      <!-- Зарезервированное место под меню приложения -->
+      <nav class="menu" aria-label="Меню приложения">
+        <button class="menu-item active" type="button" data-section="camera" aria-current="page">
+          <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+          <span>Камера</span>
+        </button>
+        <button class="menu-item" type="button" data-section="recognize">
+          <svg viewBox="0 0 24 24"><circle cx="8" cy="6" r="1.8"/><circle cx="8" cy="12" r="1.8"/><circle cx="16" cy="12" r="1.8"/><circle cx="16" cy="18" r="1.8"/><circle cx="8" cy="18" r="1.8" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="16" cy="6" r="1.8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+          <span>Распознать</span>
+        </button>
+        <button class="menu-item" type="button" data-section="translate" data-soon>
+          <svg viewBox="0 0 24 24"><path d="M4 7h9M8.5 4v3M6 7c.5 3 2.5 5.5 5.5 7M11 7c-.7 3.2-3 6-6.5 7.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M13 20l3.5-9 3.5 9M14.3 17h4.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Перевод</span>
+        </button>
+        <button class="menu-item" type="button" data-section="history" data-soon>
+          <svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v3.5h3.5M12 8v4.5l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>История</span>
+        </button>
+        <button class="menu-item" type="button" data-section="settings" data-soon>
+          <svg viewBox="0 0 24 24"><path d="M5 7h14M5 17h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="9" cy="7" r="2.3" fill="var(--dock)" stroke="currentColor" stroke-width="1.7"/><circle cx="15" cy="17" r="2.3" fill="var(--dock)" stroke="currentColor" stroke-width="1.7"/></svg>
+          <span>Настройки</span>
+        </button>
+      </nav>
+    </footer>
+
+    <!-- ===== Галерея (нижний лист) ===== -->
+    <section id="gallery" class="sheet" role="dialog" aria-modal="true" aria-labelledby="galleryTitle" hidden>
+      <div class="sheet-head">
+        <h2 id="galleryTitle">Снимки</h2>
+        <button id="galleryClose" class="icon-btn" type="button" aria-label="Закрыть галерею">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <p id="galleryEmpty" class="empty">Здесь появятся сделанные фотографии.</p>
+      <ul id="galleryGrid" class="grid"></ul>
+    </section>
+
+    <!-- ===== Просмотр снимка ===== -->
+    <section id="viewer" class="viewer" role="dialog" aria-modal="true" aria-label="Просмотр снимка" hidden>
+      <div class="viewer-top">
+        <button id="viewerClose" class="icon-btn" type="button" aria-label="Назад">
+          <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <span id="viewerName" class="viewer-name"></span>
+      </div>
+      <img id="viewerImg" alt="Снимок">
+      <div class="viewer-actions">
+        <button id="recognizeBtn" class="pill-btn" type="button">Распознать</button>
+        <button id="saveBtn" class="pill-btn ghost" type="button">Сохранить в галерею</button>
+        <button id="shareBtn" class="pill-btn ghost" type="button" hidden>Поделиться</button>
+        <button id="deleteBtn" class="pill-btn danger" type="button">Удалить</button>
+      </div>
+    </section>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <canvas id="canvas" hidden></canvas>
+  <!-- ONNX Runtime Web (WebGPU + WASM) для запуска braile.onnx в браузере -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js" defer></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
